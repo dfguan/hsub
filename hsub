@@ -1,0 +1,251 @@
+#!/bin/bash
+# File              : hsub
+# Author            : Dengfeng Guan <dfguan9@gmail.com>
+# Date              : 10.07.2022
+# Last Modified Date: 10.07.2022
+# Last Modified By  : Dengfeng Guan <dfguan9@gmail.com>
+
+#set -x
+
+# Regular Colors
+Black='\033[0;30m'        # Black
+Red='\033[0;31m'          # Red
+Green='\033[0;32m'        # Green
+Yellow='\033[0;33m'       # Yellow
+Blue='\033[0;34m'         # Blue
+Purple='\033[0;35m'       # Purple
+Cyan='\033[0;36m'         # Cyan
+White='\033[0;37m'        # White
+
+Rst='\033[0m'       # Text Reset
+
+help()
+{
+	echo -e "${Green}Usage: hsub [Option]... job_script [Job_params]... ${Rst}"
+	echo -e "Unified HPC Job Submitter\n"
+	echo -e "  ${Green}Option: ${Rst}"
+	echo -e "    ${Purple}-p PLATFORM${Rst}          HPC platform, can be PBS,SLURM,SGE,LSF     [default: PBS]"
+	echo -e "    ${Purple}-a NTASK${Rst}             Number of tasks in a job array             [default: NONE]"
+	echo -e "    ${Purple}-d WORK_DIR${Rst}          Working directory                          [default: .]"
+	echo -e "    ${Purple}-m MEM${Rst}               Memory size                                [default: NONE]"
+	echo -e "    ${Purple}-t THREADS${Rst}           Number of threads                          [default: NONE]"
+	echo -e "    ${Purple}-c TIME${Rst}              Runtime in hours                           [default: NONE]"
+	echo -e "    ${Purple}-j JOB_NAME${Rst}          Job name                                   [default: NONE]"
+	echo -e "    ${Purple}-w DEPEND_LIST${Rst}       Dependent job names                        [default: NONE]"
+	echo -e "\n  ${Green}Examples:${Rst}"
+	echo -e "      hsub -p SGE -d work -j ls ls -l"
+	exit 2
+}
+
+if [ $# -lt 1 ]
+then
+	help
+	exit 1
+fi
+
+wdir="."
+v_jname="work"
+platform="PBS" # default platform
+while getopts 'p:a:m:t:c:j:w:d:h' OPT;
+do
+	case $OPT in 
+		p) platform=$OPTARG;;
+		m) v_mem=$OPTARG;;
+		t) v_threads=$OPTARG;;
+		j) v_jname=$OPTARG;;
+		c) v_rtime=$OPTARG;;
+		w) v_dep=$OPTARG;;
+		d) wdir=$OPTARG;;
+		a) ntask=$OPTARG;;
+		h) help;;
+		?) echo -e "${Red}[Error]${Rst} unknow parameter ${Green}${OPT}${Rst}"; help;;
+	esac
+done
+
+shift $(($OPTIND - 1))
+if [ $# -lt 1 ]
+then
+	echo -e "${Red}[Error]${Rst} require a job script"
+	help
+	exit 1
+fi
+
+mkdir -p $wdir
+
+t=`date +%Y%m%d%H%M%S`
+if [ -f $wdir/.hsub_counter ]
+then
+	cnt=`cat $wdir/.hsub_counter`
+	ncnt=$((cnt + 1))
+else
+	ncnt=0
+fi
+
+sncnt=`printf %03d $ncnt`
+
+mkdir -p $wdir/$v_jname.$sncnt.$t
+dirpth=$wdir/$v_jname.$sncnt.$t
+if [ "$platform" = "PBS" ]
+then
+	cat > $dirpth/$v_jname.sh <<-EOF
+	#!/bin/bash
+	#PBS -o $dirpth/$v_jname.\$PBS_JOBID.out
+	#PBS -e $dirpth/$v_jname.\$PBS_JOBID.err
+	EOF
+
+	if [ ! $v_threads = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -l nodes=1:ppn=$v_threads
+		EOF
+	fi
+	if [ ! $ntask = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -t 1-$ntask 
+		EOF
+	fi
+
+	if [ ! $v_mem = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -l mem=$v_mem 
+		EOF
+	fi
+	if [ ! $v_rtime = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -l walltime=$v_rtime:00:00
+		EOF
+	fi
+	if [ ! $v_jname = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -N $v_jname 
+		EOF
+	fi
+	if [ ! $v_dep = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#PBS -W depend=afterok:$v_dep
+		EOF
+	fi
+
+	cat >> $dirpth/$v_jname.sh <<-EOF
+		cd \$PBS_O_WORKDIR 
+		$@
+	EOF
+
+	echo $ncnt > $wdir/.hsub_counter 
+	qsub $dirpth/$v_jname.sh
+elif [ "$platform" = "SGE" ]
+then
+	cat > $dirpth/$v_jname.sh <<-EOF
+	#!/bin/bash
+	#$ -o $dirpth
+	#$ -e $dirpth
+	#$ -V 
+	#$ -cwd 
+	EOF
+
+	if [ ! $v_threads = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -pe smp $v_threads
+		EOF
+	fi
+	if [ ! $ntask = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -t 1-$ntask 
+		EOF
+	fi
+
+	if [ ! $v_mem = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -l h_vmem=$v_mem 
+		EOF
+	fi
+	if [ ! $v_rtime = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -l h_rt=$v_rtime:00:00
+		EOF
+	fi
+	if [ ! $v_jname = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -N $v_jname 
+		EOF
+	fi
+	if [ ! $v_dep = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#$ -hold_jid $v_dep
+		EOF
+	fi
+
+
+	cat >> $dirpth/$v_jname.sh <<-EOF
+		$@
+	EOF
+
+	echo $ncnt > $wdir/.hsub_counter 
+	qsub $dirpth/$v_jname.sh
+elif [ "$platform" = "SLURM" ]
+then
+	cat > $dirpth/$v_jname.sh <<-EOF
+	#!/bin/bash
+	#SBATCH -o $dirpth/%j.out 
+	#SBATCH -e $dirpth/%j.err 
+	EOF
+
+	if [ ! $v_threads = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH --cpus-per-task=$v_threads	
+		EOF
+	fi
+	if [ ! $ntask = "" ]
+	then
+		echo "Please be aware of that Maximum array size is 1001"
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH --array=1-$ntask 
+		EOF
+	fi
+
+	if [ ! $v_mem = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH --mem=$v_mem 
+		EOF
+	fi
+	if [ ! $v_rtime = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH --time=$v_rtime:00:00
+		EOF
+	fi
+	if [ ! $v_jname = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH -J $v_jname 
+		EOF
+	fi
+	if [ ! $v_dep = "" ]
+	then
+		cat >> $dirpth/$v_jname.sh <<-EOF
+			#SBATCH --dependency=afterok:$v_dep
+		EOF
+	fi
+
+
+	cat >> $dirpth/$v_jname.sh <<-EOF
+		$@
+	EOF
+
+	echo $ncnt > $wdir/.hsub_counter 
+	sbatch $dirpth/$v_jname.sh
+fi
+echo "Your job details are kept in $dirpth"
